@@ -1,0 +1,117 @@
+name: "Roblox Publishing"
+
+on:
+  workflow_call:
+    inputs:
+      ROBLOX_ASSETID:
+        required: false
+        type: number
+      ROBLOX_FILE:
+        required: false
+        type: string
+        default: "/filepath/model.fbx"
+      ROBLOX_TYPE:
+        required: false
+        type: string
+        default: "model/fbx"
+    secrets:
+      ROBLOX_AUTH:
+        description: "The token to use for Roblox Open Cloud API."
+        required: false
+      WALLY_AUTH:
+        description: "The token to use for Wally authentication, in TOML format."
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    outputs:
+      version: ${{ fromJSON(steps.set_manifest.outputs.manifest).package.version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Rokit
+        uses: CompeyDev/setup-rokit@v0.1.2
+        with:
+          cache: true
+
+      - name: Build
+        run: rojo build -o Build.rbxm
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          path: "*.rbxm"
+          if-no-files-found: error
+
+      - name: Set Manifest
+        id: set_manifest
+        run: echo "manifest=$(wally manifest-to-json)" >> $GITHUB_OUTPUT
+
+  publish-wally:
+    if: github.ref == 'refs/heads/main' || (contains(needs.build.outputs.version, '-') && github.event_name == 'workflow_dispatch')
+
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Rokit
+        uses: CompeyDev/setup-rokit@v0.1.2
+        with:
+          cache: true
+
+      - name: Log in to wally
+        env:
+          WALLY_AUTH: |
+            [tokens]
+            "https://wally.blockfront.live/" = "${{ secrets.WALLY_AUTH || secrets.GITHUB_TOKEN }}"
+        run: |
+          mkdir ~/.wally
+          printenv WALLY_AUTH > ~/.wally/auth.toml
+
+      - name: Push update to wally
+        run: wally publish
+
+  publish-roblox:
+    if: "${{ inputs.ROBLOX_ASSETID != '' }}"
+
+    needs: [build, publish-wally]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download
+        uses: actions/download-artifact@v7
+
+      - run: |
+          curl --location --request PATCH 'https://apis.roblox.com/assets/v1/assets/${{ inputs.ROBLOX_ASSETID }}' \
+          --header 'x-api-key: ${{ secrets.ROBLOX_AUTH }}' \
+          --form 'request="{
+            \"assetId\": ${{ inputs.ROBLOX_ASSETID }},
+          }"' \
+          --form 'fileContent=@"${{ inputs.ROBLOX_FILE }}";type=${{ inputs.ROBLOX_FILE }}'
+
+  publish-github:
+    needs: [build, publish-wally]
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download
+        uses: actions/download-artifact@v7
+
+      - uses: ncipollo/release-action@v1
+        with:
+          name: ${{ needs.build.outputs.version }}
+          tag: v${{ needs.build.outputs.version }}
+          commit: ${{ github.head_ref || github.ref_name }}
+          artifacts: "**/*.rbxm"
+          prerelease: ${{ contains(needs.build.outputs.version, '-') }}
+          generateReleaseNotes: true
