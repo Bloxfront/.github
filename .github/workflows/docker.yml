@@ -18,6 +18,10 @@ on:
       DOCKER_TARGET:
         required: false
         type: string
+      DOCKERFILE:
+        required: false
+        type: string
+        default: "Dockerfile"
       DEPLOY_TAG:
         required: false
         type: string
@@ -77,6 +81,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: ${{ inputs.DOCKERFILE }}
           target: ${{ inputs.DOCKER_TARGET }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
